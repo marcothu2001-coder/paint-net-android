@@ -14,6 +14,9 @@ Reconstrução moderna, responsiva e acelerada por hardware das funcionalidades 
 - Operações de camadas: Adicionar, Duplicar, Excluir, Mesclar para Baixo (`Merge Down`) e Reordenar (subir/descer).
 
 ### 2. Caixa de Ferramentas (Toolbox)
+- **Varinha Mágica (Magic Wand)**: Seleção de áreas de cores semelhantes com algoritmo contíguo e máscara visual estilo Paint.NET (azul semi-transparente com contorno ciano).
+- **Tolerância em Tempo Real**: Ajuste o slider de tolerância (0% a 100%) ou arraste com a varinha para ver a área selecionada expandir ou encolher dinamicamente na tela.
+- **Deletar Seleção**: Botão `🗑️ Deletar Seleção` ou teclas `Delete`/`Backspace` para apagar os pixels da área selecionada transformando-os em 100% transparentes.
 - **Pincel (Brush)**: Traço suave com espessura ajustável (1px a 100px).
 - **Lápis (Pencil)**: Desenho pixel-art nítido com algoritmo de Bresenham (sem anti-aliasing).
 - **Borracha (Eraser)**: Apaga pixels com respeito à transparência alfa da camada ativa.
@@ -22,6 +25,11 @@ Reconstrução moderna, responsiva e acelerada por hardware das funcionalidades 
 - **Conta-gotas (Eyedropper)**: Captura a cor diretamente do composto visível da imagem.
 - **Texto**: Inserção de texto com tamanho dinâmico.
 - **Gestos Touch**: Zoom com dois dedos (Pinch-to-zoom) e arrastar tela (Pan) mantendo o desenho suave com um dedo.
+
+### 2.1 Remoção de Fundo e Exportação em PNG Transparente
+- Ao abrir uma imagem (`📂 Abrir`), o app carrega o arquivo em suas dimensões originais sobre fundo transparente direto.
+- Use a **Varinha Mágica** para clicar no fundo da imagem e clique em **Deletar Seleção** (ou aperte `Delete`).
+- Ao clicar em `💾 Salvar PNG`, o arquivo exportado preserva a transparência alfa real (ideal para figurinhas, logos e adesivos).
 
 ### 3. Painel de Cores Estilo Paint.NET
 - Seletor circular de cores HSV com controle de luminosidade/valor.
