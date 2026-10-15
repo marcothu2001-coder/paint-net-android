@@ -8,24 +8,38 @@ export class TopBar {
   private historyManager: HistoryManager;
   private onRenderNeeded: () => void;
   private onTogglePanel: (panel: 'colors' | 'layers') => void;
+  private onOpenImage: (img: HTMLImageElement, name: string) => void;
+  private onNewCanvas: (fillWhite: boolean) => void;
+  private onDeleteSelection: () => void;
+  private getHasSelection: () => boolean;
 
   constructor(
     container: HTMLElement, 
     layerManager: LayerManager, 
     historyManager: HistoryManager,
     onRenderNeeded: () => void,
-    onTogglePanel: (panel: 'colors' | 'layers') => void
+    onTogglePanel: (panel: 'colors' | 'layers') => void,
+    onOpenImage: (img: HTMLImageElement, name: string) => void,
+    onNewCanvas: (fillWhite: boolean) => void,
+    onDeleteSelection: () => void,
+    getHasSelection: () => boolean
   ) {
     this.container = container;
     this.layerManager = layerManager;
     this.historyManager = historyManager;
     this.onRenderNeeded = onRenderNeeded;
     this.onTogglePanel = onTogglePanel;
+    this.onOpenImage = onOpenImage;
+    this.onNewCanvas = onNewCanvas;
+    this.onDeleteSelection = onDeleteSelection;
+    this.getHasSelection = getHasSelection;
 
     this.render();
   }
 
   public render() {
+    const hasSel = this.getHasSelection();
+
     this.container.innerHTML = `
       <header class="app-topbar">
         <div class="topbar-left">
@@ -35,16 +49,23 @@ export class TopBar {
           </div>
 
           <div class="topbar-btn-group">
-            <button class="topbar-btn" id="newCanvasBtn" title="Novo Canvas">📄 Novo</button>
+            <button class="topbar-btn" id="newCanvasBtn" title="Novo Canvas (Branco ou Transparente)">📄 Novo</button>
             <label class="topbar-btn" for="openFileInput" title="Abrir Imagem">📂 Abrir</label>
             <input type="file" id="openFileInput" accept="image/*" style="display:none;" />
-            <button class="topbar-btn" id="saveImageBtn" title="Salvar Imagem">💾 Salvar</button>
+            <button class="topbar-btn" id="saveImageBtn" title="Salvar PNG com suporte a fundo transparente">💾 Salvar PNG</button>
           </div>
         </div>
 
         <div class="topbar-center">
           <button class="topbar-btn icon-btn" id="undoBtn" title="Desfazer (Ctrl+Z)" ${!this.historyManager.canUndo() ? 'disabled' : ''}>↩️</button>
           <button class="topbar-btn icon-btn" id="redoBtn" title="Refazer (Ctrl+Y)" ${!this.historyManager.canRedo() ? 'disabled' : ''}>↪️</button>
+          
+          ${hasSel ? `
+            <button class="topbar-btn danger-btn" id="topDeleteSelectionBtn" title="Deletar Seleção (Delete / Backspace)">
+              🗑️ Deletar Seleção
+            </button>
+          ` : ''}
+
           <button class="topbar-btn" id="effectsMenuBtn" title="Filtros e Ajustes">✨ Efeitos</button>
         </div>
 
@@ -115,7 +136,6 @@ export class TopBar {
   }
 
   private attachEvents() {
-    // Undo / Redo
     this.container.querySelector('#undoBtn')?.addEventListener('click', () => {
       this.historyManager.undo();
       this.onRenderNeeded();
@@ -128,7 +148,11 @@ export class TopBar {
       this.render();
     });
 
-    // Toggle panels
+    this.container.querySelector('#topDeleteSelectionBtn')?.addEventListener('click', () => {
+      this.onDeleteSelection();
+      this.render();
+    });
+
     this.container.querySelector('#toggleColorsBtn')?.addEventListener('click', () => {
       this.onTogglePanel('colors');
     });
@@ -137,7 +161,6 @@ export class TopBar {
       this.onTogglePanel('layers');
     });
 
-    // Save image
     this.container.querySelector('#saveImageBtn')?.addEventListener('click', () => {
       this.saveCompositeImage();
     });
@@ -151,22 +174,23 @@ export class TopBar {
         reader.onload = (loadEvent) => {
           const img = new Image();
           img.onload = () => {
-            const newLayer = this.layerManager.createLayer(file.name);
-            newLayer.ctx.drawImage(img, 0, 0, this.layerManager.width, this.layerManager.height);
-            this.historyManager.saveState('Carregar Imagem');
-            this.onRenderNeeded();
+            this.onOpenImage(img, file.name);
           };
           img.src = loadEvent.target?.result as string;
         };
         reader.readAsDataURL(file);
+        fileInput.value = ''; // Reset input to allow opening the same file again
       }
     });
 
     // New Canvas
     this.container.querySelector('#newCanvasBtn')?.addEventListener('click', () => {
-      if (confirm('Criar nova imagem? As alterações não salvas serão perdidas.')) {
-        window.location.reload();
-      }
+      const isTransparent = confirm(
+        'Criar novo canvas com Fundo Transparente para recorte?\n\n' +
+        '- Clique [OK] para Fundo Transparente (Ideal para sticker / recorte de fundo)\n' +
+        '- Clique [Cancelar] para Fundo Branco Clássico'
+      );
+      this.onNewCanvas(!isTransparent);
     });
 
     // Effects Modal
@@ -178,7 +202,6 @@ export class TopBar {
       modal.style.display = 'none';
     });
 
-    // Sliders feedback
     this.setupSliderWatcher('brightSlider', 'brightVal');
     this.setupSliderWatcher('contrastSlider', 'contrastVal');
     this.setupSliderWatcher('hueSlider', 'hueVal');
@@ -186,7 +209,6 @@ export class TopBar {
     this.setupSliderWatcher('blurSlider', 'blurVal');
     this.setupSliderWatcher('pixelSlider', 'pixelVal');
 
-    // Apply Effects
     this.container.querySelector('#applyBrightContrastBtn')?.addEventListener('click', () => {
       const active = this.layerManager.getActiveLayer();
       if (!active) return;
@@ -256,13 +278,13 @@ export class TopBar {
     });
   }
 
-  private saveCompositeImage() {
+  public saveCompositeImage() {
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = this.layerManager.width;
     tempCanvas.height = this.layerManager.height;
     const tempCtx = tempCanvas.getContext('2d')!;
 
-    // Export without checkerboard
+    // Clear with full transparency (preserves alpha channel completely)
     tempCtx.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
     const layers = this.layerManager.getLayers();
     for (let i = layers.length - 1; i >= 0; i--) {
@@ -277,7 +299,7 @@ export class TopBar {
 
     const dataUrl = tempCanvas.toDataURL('image/png');
     const link = document.createElement('a');
-    link.download = `paintdotnet_${Date.now()}.png`;
+    link.download = `paintdotnet_transparente_${Date.now()}.png`;
     link.href = dataUrl;
     link.click();
   }

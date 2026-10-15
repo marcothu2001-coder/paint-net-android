@@ -15,13 +15,14 @@ class PaintApp {
     zoom: 1.0,
     panX: 0,
     panY: 0,
-    activeTool: 'brush',
+    activeTool: 'magicwand',
     brushSize: 8,
     tolerance: 30,
     selectedShape: 'rectangle',
     primaryColor: '#0026FF',
     secondaryColor: '#FFFFFF',
-    activeLayerId: ''
+    activeLayerId: '',
+    hasSelection: false
   };
 
   private layerManager: LayerManager;
@@ -52,7 +53,11 @@ class PaintApp {
       this.layerManager, 
       this.historyManager, 
       this.state, 
-      () => this.renderComposite()
+      () => this.renderComposite(),
+      (_hasSelection) => {
+        this.toolBar.render();
+        this.topBar.render();
+      }
     );
 
     this.initLayout();
@@ -94,13 +99,20 @@ class PaintApp {
       this.layerManager,
       this.historyManager,
       () => this.renderComposite(),
-      (panel) => this.togglePanel(panel)
+      (panel) => this.togglePanel(panel),
+      (img, name) => this.handleOpenImage(img, name),
+      (fillWhite) => this.handleNewCanvas(fillWhite),
+      () => this.toolEngine.deleteSelection(),
+      () => this.state.hasSelection
     );
 
     this.toolBar = new ToolBar(
       document.getElementById('toolbarContainer')!,
       this.state,
-      () => {}
+      () => {},
+      (tol) => this.toolEngine.setTolerance(tol),
+      () => this.toolEngine.deleteSelection(),
+      () => this.toolEngine.clearSelection()
     );
 
     this.colorWheel = new ColorWheel(
@@ -121,6 +133,42 @@ class PaintApp {
     });
   }
 
+  private handleOpenImage(img: HTMLImageElement, name: string) {
+    this.state.width = img.width;
+    this.state.height = img.height;
+    this.displayCanvas.width = img.width;
+    this.displayCanvas.height = img.height;
+    this.toolEngine.previewCanvas.width = img.width;
+    this.toolEngine.previewCanvas.height = img.height;
+
+    // Resets layers with image directly on transparent background
+    this.layerManager.resetWithImage(img, name);
+    this.toolEngine.clearSelection();
+    this.historyManager.saveState('Abrir Imagem: ' + name);
+    this.centerCanvas();
+    this.renderComposite();
+  }
+
+  private handleNewCanvas(fillWhite: boolean) {
+    const w = prompt('Largura do Canvas (pixels):', '800');
+    const h = prompt('Altura do Canvas (pixels):', '600');
+    const width = parseInt(w || '800') || 800;
+    const height = parseInt(h || '600') || 600;
+
+    this.state.width = width;
+    this.state.height = height;
+    this.displayCanvas.width = width;
+    this.displayCanvas.height = height;
+    this.toolEngine.previewCanvas.width = width;
+    this.toolEngine.previewCanvas.height = height;
+
+    this.layerManager.resetNewCanvas(width, height, fillWhite);
+    this.toolEngine.clearSelection();
+    this.historyManager.saveState('Novo Canvas');
+    this.centerCanvas();
+    this.renderComposite();
+  }
+
   private togglePanel(panel: 'colors' | 'layers') {
     const el = document.getElementById(panel === 'colors' ? 'colorsFloatingPanel' : 'layersFloatingPanel');
     if (el) {
@@ -131,7 +179,7 @@ class PaintApp {
   private renderComposite() {
     this.layerManager.renderComposite(this.displayCtx);
 
-    // Overlay shape preview if active
+    // Overlay shape preview or selection mask if active
     if (this.toolEngine.previewCanvas) {
       this.displayCtx.drawImage(this.toolEngine.previewCanvas, 0, 0);
     }
@@ -144,7 +192,6 @@ class PaintApp {
   private centerCanvas() {
     const vw = this.viewportEl.clientWidth;
     const vh = this.viewportEl.clientHeight;
-    // Fit canvas comfortably in viewport
     const scaleX = (vw - 80) / this.state.width;
     const scaleY = (vh - 80) / this.state.height;
     this.state.zoom = Math.min(1.0, Math.min(scaleX, scaleY));
@@ -255,7 +302,7 @@ class PaintApp {
       }
     });
 
-    // Keyboard Shortcuts (Ctrl+Z, Ctrl+Y)
+    // Keyboard Shortcuts (Ctrl+Z, Ctrl+Y, Delete, Backspace, Escape)
     window.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
@@ -269,6 +316,16 @@ class PaintApp {
         e.preventDefault();
         this.historyManager.redo();
         this.renderComposite();
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (this.state.hasSelection) {
+          e.preventDefault();
+          this.toolEngine.deleteSelection();
+        }
+      } else if (e.key === 'Escape') {
+        if (this.state.hasSelection) {
+          e.preventDefault();
+          this.toolEngine.clearSelection();
+        }
       }
     });
   }

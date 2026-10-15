@@ -5,7 +5,7 @@ import { HistoryManager } from './HistoryManager';
 export class ToolEngine {
   private layerManager: LayerManager;
   private historyManager: HistoryManager;
-  private state: AppState;
+  public state: AppState;
 
   private isDrawing: boolean = false;
   private lastX: number = 0;
@@ -16,22 +16,36 @@ export class ToolEngine {
   public previewCanvas: HTMLCanvasElement;
   public previewCtx: CanvasRenderingContext2D;
   private onCompositeNeedUpdate: () => void;
+  private onSelectionChange?: (hasSelection: boolean) => void;
+
+  // Magic Wand state
+  public selectionMask: Uint8Array | null = null;
+  public lastWandPoint: { x: number; y: number } | null = null;
 
   constructor(
     layerManager: LayerManager, 
     historyManager: HistoryManager, 
     state: AppState,
-    onCompositeNeedUpdate: () => void
+    onCompositeNeedUpdate: () => void,
+    onSelectionChange?: (hasSelection: boolean) => void
   ) {
     this.layerManager = layerManager;
     this.historyManager = historyManager;
     this.state = state;
     this.onCompositeNeedUpdate = onCompositeNeedUpdate;
+    this.onSelectionChange = onSelectionChange;
 
     this.previewCanvas = document.createElement('canvas');
     this.previewCanvas.width = layerManager.width;
     this.previewCanvas.height = layerManager.height;
     this.previewCtx = this.previewCanvas.getContext('2d')!;
+  }
+
+  public setTolerance(tolerance: number) {
+    this.state.tolerance = tolerance;
+    if (this.state.activeTool === 'magicwand' && this.lastWandPoint) {
+      this.computeMagicWand(this.lastWandPoint.x, this.lastWandPoint.y, tolerance);
+    }
   }
 
   public onPointerDown(x: number, y: number) {
@@ -79,6 +93,9 @@ export class ToolEngine {
       this.historyManager.saveState('Balde de Tinta');
       this.onCompositeNeedUpdate();
       this.isDrawing = false;
+    } else if (this.state.activeTool === 'magicwand') {
+      this.lastWandPoint = { x: Math.floor(x), y: Math.floor(y) };
+      this.computeMagicWand(this.lastWandPoint.x, this.lastWandPoint.y, this.state.tolerance);
     } else if (this.state.activeTool === 'text') {
       this.insertText(x, y);
       this.isDrawing = false;
@@ -134,6 +151,14 @@ export class ToolEngine {
       this.previewCtx.clearRect(0, 0, this.previewCanvas.width, this.previewCanvas.height);
       this.drawShape(this.previewCtx, this.startX, this.startY, x, y, this.state.selectedShape);
       this.onCompositeNeedUpdate();
+    } else if (this.state.activeTool === 'magicwand') {
+      // Dragging horizontally dynamically adjusts tolerance like in Paint.NET
+      const dx = x - this.startX;
+      const tolChange = Math.round(dx / 3);
+      const newTol = Math.max(0, Math.min(100, this.state.tolerance + tolChange));
+      if (this.lastWandPoint) {
+        this.computeMagicWand(this.lastWandPoint.x, this.lastWandPoint.y, newTol);
+      }
     }
   }
 
@@ -144,13 +169,164 @@ export class ToolEngine {
     if (!activeLayer) return;
 
     if (this.state.activeTool === 'shapes') {
-      // Commit shape to active layer
       this.drawShape(activeLayer.ctx, this.startX, this.startY, x, y, this.state.selectedShape);
       this.previewCtx.clearRect(0, 0, this.previewCanvas.width, this.previewCanvas.height);
       this.historyManager.saveState('Forma: ' + this.state.selectedShape);
       this.onCompositeNeedUpdate();
     } else if (this.state.activeTool === 'brush' || this.state.activeTool === 'pencil' || this.state.activeTool === 'eraser') {
       this.historyManager.saveState('Traço: ' + this.state.activeTool);
+    }
+  }
+
+  public computeMagicWand(startX: number, startY: number, tolerance: number) {
+    const activeLayer = this.layerManager.getActiveLayer();
+    if (!activeLayer) return;
+
+    const width = this.layerManager.width;
+    const height = this.layerManager.height;
+    if (startX < 0 || startX >= width || startY < 0 || startY >= height) return;
+
+    const imgData = activeLayer.ctx.getImageData(0, 0, width, height);
+    const data = imgData.data;
+
+    const startIndex = (startY * width + startX) * 4;
+    const targetR = data[startIndex];
+    const targetG = data[startIndex + 1];
+    const targetB = data[startIndex + 2];
+    const targetA = data[startIndex + 3];
+
+    // Distance threshold based on tolerance 0..100
+    const tolDistance = (tolerance / 100) * 441.67; // sqrt(255^2 * 3)
+
+    const matches = (idx: number) => {
+      const dr = data[idx] - targetR;
+      const dg = data[idx + 1] - targetG;
+      const db = data[idx + 2] - targetB;
+      const da = data[idx + 3] - targetA;
+      return Math.sqrt(dr * dr + dg * dg + db * db + da * da) <= tolDistance;
+    };
+
+    const mask = new Uint8Array(width * height);
+    const queue = [startX + startY * width];
+    mask[startX + startY * width] = 1;
+
+    let selectedCount = 0;
+
+    while (queue.length > 0) {
+      const pos = queue.pop()!;
+      selectedCount++;
+      const cx = pos % width;
+      const cy = Math.floor(pos / width);
+
+      const neighbors = [
+        cx > 0 ? pos - 1 : -1,
+        cx < width - 1 ? pos + 1 : -1,
+        cy > 0 ? pos - width : -1,
+        cy < height - 1 ? pos + width : -1
+      ];
+
+      for (const n of neighbors) {
+        if (n !== -1 && mask[n] === 0 && matches(n * 4)) {
+          mask[n] = 1;
+          queue.push(n);
+        }
+      }
+    }
+
+    this.selectionMask = mask;
+    this.state.hasSelection = selectedCount > 0;
+
+    // Render selection overlay in real-time
+    this.renderSelectionMask();
+    this.onCompositeNeedUpdate();
+
+    if (this.onSelectionChange) {
+      this.onSelectionChange(this.state.hasSelection);
+    }
+  }
+
+  private renderSelectionMask() {
+    const width = this.layerManager.width;
+    const height = this.layerManager.height;
+    this.previewCtx.clearRect(0, 0, width, height);
+
+    if (!this.selectionMask || !this.state.hasSelection) return;
+
+    const overlay = this.previewCtx.createImageData(width, height);
+    const outData = overlay.data;
+    const mask = this.selectionMask;
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = y * width + x;
+        if (mask[i] === 1) {
+          const idx = i * 4;
+
+          // Check if boundary pixel (border)
+          const isEdge = 
+            x === 0 || x === width - 1 || y === 0 || y === height - 1 ||
+            mask[i - 1] === 0 || mask[i + 1] === 0 || 
+            mask[i - width] === 0 || mask[i + width] === 0;
+
+          if (isEdge) {
+            // Bright cyan border (Paint.NET style)
+            outData[idx] = 0;
+            outData[idx + 1] = 230;
+            outData[idx + 2] = 255;
+            outData[idx + 3] = 255;
+          } else {
+            // Semi-transparent blue fill
+            outData[idx] = 0;
+            outData[idx + 1] = 162;
+            outData[idx + 2] = 232;
+            outData[idx + 3] = 100;
+          }
+        }
+      }
+    }
+
+    this.previewCtx.putImageData(overlay, 0, 0);
+  }
+
+  public deleteSelection() {
+    if (!this.selectionMask || !this.state.hasSelection) return;
+
+    const activeLayer = this.layerManager.getActiveLayer();
+    if (!activeLayer) return;
+
+    const width = this.layerManager.width;
+    const height = this.layerManager.height;
+    const imgData = activeLayer.ctx.getImageData(0, 0, width, height);
+    const data = imgData.data;
+    const mask = this.selectionMask;
+
+    for (let i = 0; i < mask.length; i++) {
+      if (mask[i] === 1) {
+        const idx = i * 4;
+        data[idx] = 0;
+        data[idx + 1] = 0;
+        data[idx + 2] = 0;
+        data[idx + 3] = 0; // 100% transparent alpha
+      }
+    }
+
+    activeLayer.ctx.putImageData(imgData, 0, 0);
+
+    // Clear selection
+    this.clearSelection();
+    this.historyManager.saveState('Deletar Seleção');
+    this.onCompositeNeedUpdate();
+  }
+
+  public clearSelection() {
+    this.selectionMask = null;
+    this.lastWandPoint = null;
+    this.state.hasSelection = false;
+    this.previewCtx.clearRect(0, 0, this.previewCanvas.width, this.previewCanvas.height);
+    this.onCompositeNeedUpdate();
+
+    if (this.onSelectionChange) {
+      this.onSelectionChange(false);
     }
   }
 
@@ -199,7 +375,6 @@ export class ToolEngine {
   }
 
   private drawPencilLine(ctx: CanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number) {
-    // Bresenham's line algorithm
     const dx = Math.abs(x1 - x0);
     const dy = Math.abs(y1 - y0);
     const sx = x0 < x1 ? 1 : -1;
@@ -227,7 +402,6 @@ export class ToolEngine {
     const activeLayer = this.layerManager.getActiveLayer();
     if (!activeLayer) return;
 
-    // Pick from composite
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = this.layerManager.width;
     tempCanvas.height = this.layerManager.height;
@@ -256,17 +430,14 @@ export class ToolEngine {
     const targetB = data[startIndex + 2];
     const targetA = data[startIndex + 3];
 
-    // Parse fill color
     const fillR = parseInt(this.state.primaryColor.slice(1, 3), 16) || 0;
     const fillG = parseInt(this.state.primaryColor.slice(3, 5), 16) || 0;
     const fillB = parseInt(this.state.primaryColor.slice(5, 7), 16) || 0;
     const fillA = 255;
 
-    // Same color check
     if (targetR === fillR && targetG === fillG && targetB === fillB && targetA === fillA) return;
 
-    // Tolerance range 0..100 maps to distance threshold
-    const tolDistance = (this.state.tolerance / 100) * 441.67; // sqrt(255^2*3)
+    const tolDistance = (this.state.tolerance / 100) * 441.67;
 
     const matches = (idx: number) => {
       const dr = data[idx] - targetR;
@@ -291,7 +462,6 @@ export class ToolEngine {
       data[idx + 2] = fillB;
       data[idx + 3] = fillA;
 
-      // 4-way neighbours
       const neighbors = [
         cx > 0 ? pos - 1 : -1,
         cx < width - 1 ? pos + 1 : -1,

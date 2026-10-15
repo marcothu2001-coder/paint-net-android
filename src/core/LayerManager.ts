@@ -230,4 +230,51 @@ export class LayerManager {
     this.activeLayerId = activeId;
     this.notifyChange();
   }
+
+  public resize(width: number, height: number) {
+    this.width = width;
+    this.height = height;
+    this.layers.forEach(l => {
+      const oldCanvas = l.canvas;
+      const newCanvas = document.createElement('canvas');
+      newCanvas.width = width;
+      newCanvas.height = height;
+      const newCtx = newCanvas.getContext('2d', { willReadFrequently: true })!;
+      newCtx.drawImage(oldCanvas, 0, 0);
+      l.canvas = newCanvas;
+      l.ctx = newCtx;
+    });
+    this.notifyChange();
+  }
+
+  public resetWithImage(img: HTMLImageElement, name: string) {
+    this.width = img.width;
+    this.height = img.height;
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+    ctx.drawImage(img, 0, 0);
+
+    const layer: Layer = {
+      id: 'layer_' + Date.now(),
+      name: name || 'Imagem',
+      canvas,
+      ctx,
+      visible: true,
+      opacity: 1.0,
+      blendMode: 'source-over'
+    };
+
+    this.layers = [layer];
+    this.activeLayerId = layer.id;
+    this.notifyChange();
+  }
+
+  public resetNewCanvas(width: number, height: number, fillWhite: boolean = false) {
+    this.width = width;
+    this.height = height;
+    this.layers = [];
+    this.createLayer(fillWhite ? 'Plano de Fundo' : 'Camada 1', fillWhite);
+  }
 }

@@ -3,6 +3,7 @@ export type ToolType =
   | 'pencil' 
   | 'eraser' 
   | 'floodfill' 
+  | 'magicwand'
   | 'shapes' 
   | 'eyedropper' 
   | 'text' 
@@ -60,4 +61,5 @@ export interface AppState {
   primaryColor: string; // #RRGGBBAA or #RRGGBB
   secondaryColor: string;
   activeLayerId: string;
+  hasSelection: boolean;
 }
