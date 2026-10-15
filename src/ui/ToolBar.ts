@@ -7,12 +7,14 @@ export class ToolBar {
   private onToleranceChange: (tolerance: number) => void;
   private onDeleteSelection: () => void;
   private onClearSelection: () => void;
+  private onCommitMove: () => void;
 
   private tools: { id: ToolType; label: string; icon: string }[] = [
     { id: 'brush', label: 'Pincel', icon: '🖌️' },
     { id: 'pencil', label: 'Lápis', icon: '✏️' },
     { id: 'eraser', label: 'Borracha', icon: '🧼' },
     { id: 'magicwand', label: 'Varinha', icon: '🪄' },
+    { id: 'moveselection', label: 'Mover', icon: '✥' },
     { id: 'floodfill', label: 'Balde', icon: '🪣' },
     { id: 'shapes', label: 'Formas', icon: '🔷' },
     { id: 'eyedropper', label: 'Conta-gotas', icon: '💧' },
@@ -25,7 +27,8 @@ export class ToolBar {
     onToolChange: (tool: ToolType) => void,
     onToleranceChange: (tolerance: number) => void,
     onDeleteSelection: () => void,
-    onClearSelection: () => void
+    onClearSelection: () => void,
+    onCommitMove: () => void
   ) {
     this.container = container;
     this.state = state;
@@ -33,6 +36,7 @@ export class ToolBar {
     this.onToleranceChange = onToleranceChange;
     this.onDeleteSelection = onDeleteSelection;
     this.onClearSelection = onClearSelection;
+    this.onCommitMove = onCommitMove;
     this.render();
   }
 
@@ -51,12 +55,25 @@ export class ToolBar {
         </div>
 
         <div class="tool-options-bar" id="toolOptionsBar">
-          ${this.state.activeTool !== 'magicwand' && this.state.activeTool !== 'eyedropper' ? `
+          ${this.state.activeTool !== 'magicwand' && this.state.activeTool !== 'moveselection' && this.state.activeTool !== 'eyedropper' ? `
             <div class="option-item">
               <label>Tamanho:</label>
               <input type="range" id="brushSizeSlider" min="1" max="100" value="${this.state.brushSize}" />
               <span id="brushSizeVal">${this.state.brushSize}px</span>
             </div>
+          ` : ''}
+
+          ${this.state.activeTool === 'moveselection' ? `
+            <div class="option-item">
+              <label>Modo de Mover:</label>
+              <select id="moveModeSelect">
+                <option value="pixels" ${this.state.moveMode === 'pixels' ? 'selected' : ''}>Mover Pixels (Conteúdo)</option>
+                <option value="selection" ${this.state.moveMode === 'selection' ? 'selected' : ''}>Mover Apenas Contorno</option>
+              </select>
+            </div>
+            <button class="action-btn" id="commitMoveBtn" title="Fixar pixels na camada">
+              📌 Fixar
+            </button>
           ` : ''}
 
           ${this.state.activeTool === 'shapes' ? `
@@ -82,8 +99,13 @@ export class ToolBar {
 
           ${this.state.hasSelection ? `
             <div class="selection-actions">
+              ${this.state.activeTool !== 'moveselection' ? `
+                <button class="action-btn" id="quickMoveBtn" title="Ativar ferramenta Mover">
+                  ✥ Mover
+                </button>
+              ` : ''}
               <button class="action-btn danger-btn" id="deleteSelectionBtn" title="Deletar pixels da seleção (Delete)">
-                🗑️ Deletar Seleção
+                🗑️ Deletar
               </button>
               <button class="action-btn secondary-btn" id="clearSelectionBtn" title="Desmarcar seleção">
                 ✕ Desmarcar
@@ -120,6 +142,23 @@ export class ToolBar {
     const shapeSelect = this.container.querySelector('#shapeSelect') as HTMLSelectElement;
     shapeSelect?.addEventListener('change', () => {
       this.state.selectedShape = shapeSelect.value as ShapeType;
+    });
+
+    const moveModeSelect = this.container.querySelector('#moveModeSelect') as HTMLSelectElement;
+    moveModeSelect?.addEventListener('change', () => {
+      this.state.moveMode = moveModeSelect.value as 'pixels' | 'selection';
+    });
+
+    const commitMoveBtn = this.container.querySelector('#commitMoveBtn');
+    commitMoveBtn?.addEventListener('click', () => {
+      this.onCommitMove();
+    });
+
+    const quickMoveBtn = this.container.querySelector('#quickMoveBtn');
+    quickMoveBtn?.addEventListener('click', () => {
+      this.state.activeTool = 'moveselection';
+      this.render();
+      this.onToolChange('moveselection');
     });
 
     const tolSlider = this.container.querySelector('#toleranceSlider') as HTMLInputElement;

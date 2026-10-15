@@ -22,7 +22,8 @@ class PaintApp {
     primaryColor: '#0026FF',
     secondaryColor: '#FFFFFF',
     activeLayerId: '',
-    hasSelection: false
+    hasSelection: false,
+    moveMode: 'pixels'
   };
 
   private layerManager: LayerManager;
@@ -109,10 +110,15 @@ class PaintApp {
     this.toolBar = new ToolBar(
       document.getElementById('toolbarContainer')!,
       this.state,
-      () => {},
+      (tool) => {
+        if (tool !== 'moveselection' && this.toolEngine.floatingCanvas) {
+          this.toolEngine.commitMove();
+        }
+      },
       (tol) => this.toolEngine.setTolerance(tol),
       () => this.toolEngine.deleteSelection(),
-      () => this.toolEngine.clearSelection()
+      () => this.toolEngine.clearSelection(),
+      () => this.toolEngine.commitMove()
     );
 
     this.colorWheel = new ColorWheel(
@@ -325,6 +331,11 @@ class PaintApp {
         if (this.state.hasSelection) {
           e.preventDefault();
           this.toolEngine.clearSelection();
+        }
+      } else if (e.key === 'Enter') {
+        if (this.toolEngine.floatingCanvas) {
+          e.preventDefault();
+          this.toolEngine.commitMove();
         }
       }
     });

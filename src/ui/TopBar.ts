@@ -1,6 +1,7 @@
 import { LayerManager } from '../core/LayerManager';
 import { HistoryManager } from '../core/HistoryManager';
 import { EffectsEngine } from '../core/EffectsEngine';
+import { saveCanvasToPNG } from '../utils/saveImage';
 
 export class TopBar {
   private container: HTMLElement;
@@ -278,29 +279,42 @@ export class TopBar {
     });
   }
 
-  public saveCompositeImage() {
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = this.layerManager.width;
-    tempCanvas.height = this.layerManager.height;
-    const tempCtx = tempCanvas.getContext('2d')!;
-
-    // Clear with full transparency (preserves alpha channel completely)
-    tempCtx.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
-    const layers = this.layerManager.getLayers();
-    for (let i = layers.length - 1; i >= 0; i--) {
-      const layer = layers[i];
-      if (!layer.visible || layer.opacity <= 0) continue;
-      tempCtx.save();
-      tempCtx.globalAlpha = layer.opacity;
-      tempCtx.globalCompositeOperation = layer.blendMode;
-      tempCtx.drawImage(layer.canvas, 0, 0);
-      tempCtx.restore();
+  public async saveCompositeImage() {
+    const saveBtn = this.container.querySelector('#saveImageBtn') as HTMLButtonElement;
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = '⏳ Salvando...';
     }
 
-    const dataUrl = tempCanvas.toDataURL('image/png');
-    const link = document.createElement('a');
-    link.download = `paintdotnet_transparente_${Date.now()}.png`;
-    link.href = dataUrl;
-    link.click();
+    try {
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = this.layerManager.width;
+      tempCanvas.height = this.layerManager.height;
+      const tempCtx = tempCanvas.getContext('2d')!;
+
+      // Clear with full transparency (preserves alpha channel completely)
+      tempCtx.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
+      const layers = this.layerManager.getLayers();
+      for (let i = layers.length - 1; i >= 0; i--) {
+        const layer = layers[i];
+        if (!layer.visible || layer.opacity <= 0) continue;
+        tempCtx.save();
+        tempCtx.globalAlpha = layer.opacity;
+        tempCtx.globalCompositeOperation = layer.blendMode;
+        tempCtx.drawImage(layer.canvas, 0, 0);
+        tempCtx.restore();
+      }
+
+      const fileName = `paintdotnet_${Date.now()}.png`;
+      const success = await saveCanvasToPNG(tempCanvas, fileName);
+      if (success) {
+        alert('✅ Imagem salva com sucesso! (PNG com suporte a transparência)');
+      }
+    } finally {
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = '💾 Salvar PNG';
+      }
+    }
   }
 }

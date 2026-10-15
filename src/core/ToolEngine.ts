@@ -18,9 +18,20 @@ export class ToolEngine {
   private onCompositeNeedUpdate: () => void;
   private onSelectionChange?: (hasSelection: boolean) => void;
 
-  // Magic Wand state
+  // Magic Wand & Selection state
   public selectionMask: Uint8Array | null = null;
   public lastWandPoint: { x: number; y: number } | null = null;
+
+  // Move Selection & Pixels state
+  public isMovingSelection: boolean = false;
+  public moveStartX: number = 0;
+  public moveStartY: number = 0;
+  public floatingCanvas: HTMLCanvasElement | null = null;
+  public floatingCtx: CanvasRenderingContext2D | null = null;
+  public floatingBaseX: number = 0;
+  public floatingBaseY: number = 0;
+  public currentMoveOffsetX: number = 0;
+  public currentMoveOffsetY: number = 0;
 
   constructor(
     layerManager: LayerManager, 
@@ -57,6 +68,19 @@ export class ToolEngine {
     this.lastY = y;
     this.startX = x;
     this.startY = y;
+
+    // Se a ferramenta for Mover Seleção
+    if (this.state.activeTool === 'moveselection') {
+      if (this.state.hasSelection && this.selectionMask) {
+        this.startMoveSelection(x, y);
+      }
+      return;
+    }
+
+    // Se estiver em outra ferramenta e havia pixels flutuando de um movimento anterior, fixa-os
+    if (this.floatingCanvas) {
+      this.commitMove();
+    }
 
     if (this.state.activeTool === 'brush') {
       const ctx = activeLayer.ctx;
@@ -107,6 +131,13 @@ export class ToolEngine {
     const activeLayer = this.layerManager.getActiveLayer();
     if (!activeLayer) return;
 
+    if (this.state.activeTool === 'moveselection') {
+      if (this.isMovingSelection) {
+        this.updateMoveSelection(x, y);
+      }
+      return;
+    }
+
     if (this.state.activeTool === 'brush') {
       const ctx = activeLayer.ctx;
       ctx.save();
@@ -147,12 +178,10 @@ export class ToolEngine {
       this.lastY = y;
       this.onCompositeNeedUpdate();
     } else if (this.state.activeTool === 'shapes') {
-      // Draw live shape on preview canvas
       this.previewCtx.clearRect(0, 0, this.previewCanvas.width, this.previewCanvas.height);
       this.drawShape(this.previewCtx, this.startX, this.startY, x, y, this.state.selectedShape);
       this.onCompositeNeedUpdate();
     } else if (this.state.activeTool === 'magicwand') {
-      // Dragging horizontally dynamically adjusts tolerance like in Paint.NET
       const dx = x - this.startX;
       const tolChange = Math.round(dx / 3);
       const newTol = Math.max(0, Math.min(100, this.state.tolerance + tolChange));
@@ -165,6 +194,14 @@ export class ToolEngine {
   public onPointerUp(x: number, y: number) {
     if (!this.isDrawing) return;
     this.isDrawing = false;
+
+    if (this.state.activeTool === 'moveselection') {
+      if (this.isMovingSelection) {
+        this.finishMoveSelection();
+      }
+      return;
+    }
+
     const activeLayer = this.layerManager.getActiveLayer();
     if (!activeLayer) return;
 
@@ -178,7 +215,204 @@ export class ToolEngine {
     }
   }
 
+  // --- MOTOR DE MOVER SELEÇÃO & PIXELS ---
+
+  private startMoveSelection(x: number, y: number) {
+    this.isMovingSelection = true;
+    this.moveStartX = x;
+    this.moveStartY = y;
+
+    // Se estiver no modo de mover pixels e ainda não recortou para o buffer flutuante
+    if (this.state.moveMode === 'pixels' && !this.floatingCanvas) {
+      this.extractSelectionToFloating();
+    }
+  }
+
+  private extractSelectionToFloating() {
+    if (!this.selectionMask || !this.state.hasSelection) return;
+    const activeLayer = this.layerManager.getActiveLayer();
+    if (!activeLayer) return;
+
+    const width = this.layerManager.width;
+    const height = this.layerManager.height;
+    const activeImgData = activeLayer.ctx.getImageData(0, 0, width, height);
+    const activeData = activeImgData.data;
+
+    this.floatingCanvas = document.createElement('canvas');
+    this.floatingCanvas.width = width;
+    this.floatingCanvas.height = height;
+    this.floatingCtx = this.floatingCanvas.getContext('2d')!;
+
+    const floatImgData = this.floatingCtx.createImageData(width, height);
+    const floatData = floatImgData.data;
+    const mask = this.selectionMask;
+
+    for (let i = 0; i < mask.length; i++) {
+      if (mask[i] === 1) {
+        const idx = i * 4;
+        floatData[idx] = activeData[idx];
+        floatData[idx + 1] = activeData[idx + 1];
+        floatData[idx + 2] = activeData[idx + 2];
+        floatData[idx + 3] = activeData[idx + 3];
+
+        // Limpa na camada ativa
+        activeData[idx] = 0;
+        activeData[idx + 1] = 0;
+        activeData[idx + 2] = 0;
+        activeData[idx + 3] = 0;
+      }
+    }
+
+    this.floatingCtx.putImageData(floatImgData, 0, 0);
+    activeLayer.ctx.putImageData(activeImgData, 0, 0);
+
+    this.floatingBaseX = 0;
+    this.floatingBaseY = 0;
+    this.currentMoveOffsetX = 0;
+    this.currentMoveOffsetY = 0;
+  }
+
+  private updateMoveSelection(x: number, y: number) {
+    this.currentMoveOffsetX = Math.round(x - this.moveStartX);
+    this.currentMoveOffsetY = Math.round(y - this.moveStartY);
+    this.renderMovedPreview();
+  }
+
+  private finishMoveSelection() {
+    this.floatingBaseX += this.currentMoveOffsetX;
+    this.floatingBaseY += this.currentMoveOffsetY;
+    this.currentMoveOffsetX = 0;
+    this.currentMoveOffsetY = 0;
+    this.isMovingSelection = false;
+  }
+
+  public commitMove() {
+    const totalX = this.floatingBaseX + this.currentMoveOffsetX;
+    const totalY = this.floatingBaseY + this.currentMoveOffsetY;
+
+    const activeLayer = this.layerManager.getActiveLayer();
+    if (activeLayer) {
+      if (this.floatingCanvas) {
+        // Estampa os pixels flutuantes na camada ativa
+        activeLayer.ctx.save();
+        activeLayer.ctx.drawImage(this.floatingCanvas, totalX, totalY);
+        activeLayer.ctx.restore();
+      }
+
+      // Desloca a máscara de seleção para a nova posição
+      if (this.selectionMask && (totalX !== 0 || totalY !== 0)) {
+        this.shiftSelectionMask(totalX, totalY);
+      }
+
+      this.historyManager.saveState('Mover Seleção');
+    }
+
+    this.floatingCanvas = null;
+    this.floatingCtx = null;
+    this.floatingBaseX = 0;
+    this.floatingBaseY = 0;
+    this.currentMoveOffsetX = 0;
+    this.currentMoveOffsetY = 0;
+
+    this.renderSelectionMask();
+    this.onCompositeNeedUpdate();
+  }
+
+  private shiftSelectionMask(dx: number, dy: number) {
+    if (!this.selectionMask) return;
+    const width = this.layerManager.width;
+    const height = this.layerManager.height;
+    const newMask = new Uint8Array(width * height);
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const oldIdx = y * width + x;
+        if (this.selectionMask[oldIdx] === 1) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+            newMask[ny * width + nx] = 1;
+          }
+        }
+      }
+    }
+    this.selectionMask = newMask;
+  }
+
+  private renderMovedPreview() {
+    const width = this.layerManager.width;
+    const height = this.layerManager.height;
+    this.previewCtx.clearRect(0, 0, width, height);
+
+    const totalX = this.floatingBaseX + this.currentMoveOffsetX;
+    const totalY = this.floatingBaseY + this.currentMoveOffsetY;
+
+    // Se houver pixels flutuando, desenha-os deslocados
+    if (this.floatingCanvas) {
+      this.previewCtx.drawImage(this.floatingCanvas, totalX, totalY);
+    }
+
+    // Desenha o contorno da seleção deslocado
+    if (this.selectionMask && this.state.hasSelection) {
+      this.renderShiftedSelectionOverlay(totalX, totalY);
+    }
+
+    this.onCompositeNeedUpdate();
+  }
+
+  private renderShiftedSelectionOverlay(dx: number, dy: number) {
+    const width = this.layerManager.width;
+    const height = this.layerManager.height;
+    const overlay = this.previewCtx.createImageData(width, height);
+    const outData = overlay.data;
+    const mask = this.selectionMask!;
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = y * width + x;
+        if (mask[i] === 1) {
+          const targetX = x + dx;
+          const targetY = y + dy;
+
+          if (targetX >= 0 && targetX < width && targetY >= 0 && targetY < height) {
+            const outIdx = (targetY * width + targetX) * 4;
+
+            const isEdge = 
+              x === 0 || x === width - 1 || y === 0 || y === height - 1 ||
+              mask[i - 1] === 0 || mask[i + 1] === 0 || 
+              mask[i - width] === 0 || mask[i + width] === 0;
+
+            if (isEdge) {
+              outData[outIdx] = 0;
+              outData[outIdx + 1] = 230;
+              outData[outIdx + 2] = 255;
+              outData[outIdx + 3] = 255;
+            } else {
+              outData[outIdx] = 0;
+              outData[outIdx + 1] = 162;
+              outData[outIdx + 2] = 232;
+              outData[outIdx + 3] = 90;
+            }
+          }
+        }
+      }
+    }
+
+    // Composição sobre o que já foi desenhado
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = width;
+    tempCanvas.height = height;
+    tempCanvas.getContext('2d')!.putImageData(overlay, 0, 0);
+    this.previewCtx.drawImage(tempCanvas, 0, 0);
+  }
+
+  // --- MOTOR DA VARINHA MÁGICA ---
+
   public computeMagicWand(startX: number, startY: number, tolerance: number) {
+    if (this.floatingCanvas) {
+      this.commitMove();
+    }
+
     const activeLayer = this.layerManager.getActiveLayer();
     if (!activeLayer) return;
 
@@ -195,8 +429,7 @@ export class ToolEngine {
     const targetB = data[startIndex + 2];
     const targetA = data[startIndex + 3];
 
-    // Distance threshold based on tolerance 0..100
-    const tolDistance = (tolerance / 100) * 441.67; // sqrt(255^2 * 3)
+    const tolDistance = (tolerance / 100) * 441.67;
 
     const matches = (idx: number) => {
       const dr = data[idx] - targetR;
@@ -236,7 +469,6 @@ export class ToolEngine {
     this.selectionMask = mask;
     this.state.hasSelection = selectedCount > 0;
 
-    // Render selection overlay in real-time
     this.renderSelectionMask();
     this.onCompositeNeedUpdate();
 
@@ -245,7 +477,7 @@ export class ToolEngine {
     }
   }
 
-  private renderSelectionMask() {
+  public renderSelectionMask() {
     const width = this.layerManager.width;
     const height = this.layerManager.height;
     this.previewCtx.clearRect(0, 0, width, height);
@@ -262,20 +494,17 @@ export class ToolEngine {
         if (mask[i] === 1) {
           const idx = i * 4;
 
-          // Check if boundary pixel (border)
           const isEdge = 
             x === 0 || x === width - 1 || y === 0 || y === height - 1 ||
             mask[i - 1] === 0 || mask[i + 1] === 0 || 
             mask[i - width] === 0 || mask[i + width] === 0;
 
           if (isEdge) {
-            // Bright cyan border (Paint.NET style)
             outData[idx] = 0;
             outData[idx + 1] = 230;
             outData[idx + 2] = 255;
             outData[idx + 3] = 255;
           } else {
-            // Semi-transparent blue fill
             outData[idx] = 0;
             outData[idx + 1] = 162;
             outData[idx + 2] = 232;
@@ -289,6 +518,16 @@ export class ToolEngine {
   }
 
   public deleteSelection() {
+    if (this.floatingCanvas) {
+      // Se havia pixels flutuando, simplesmente descarta
+      this.floatingCanvas = null;
+      this.floatingCtx = null;
+      this.clearSelection();
+      this.historyManager.saveState('Deletar Seleção');
+      this.onCompositeNeedUpdate();
+      return;
+    }
+
     if (!this.selectionMask || !this.state.hasSelection) return;
 
     const activeLayer = this.layerManager.getActiveLayer();
@@ -306,19 +545,22 @@ export class ToolEngine {
         data[idx] = 0;
         data[idx + 1] = 0;
         data[idx + 2] = 0;
-        data[idx + 3] = 0; // 100% transparent alpha
+        data[idx + 3] = 0; // Transparente
       }
     }
 
     activeLayer.ctx.putImageData(imgData, 0, 0);
 
-    // Clear selection
     this.clearSelection();
     this.historyManager.saveState('Deletar Seleção');
     this.onCompositeNeedUpdate();
   }
 
   public clearSelection() {
+    if (this.floatingCanvas) {
+      this.commitMove();
+    }
+
     this.selectionMask = null;
     this.lastWandPoint = null;
     this.state.hasSelection = false;

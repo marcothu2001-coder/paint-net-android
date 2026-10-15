@@ -4,6 +4,7 @@ export type ToolType =
   | 'eraser' 
   | 'floodfill' 
   | 'magicwand'
+  | 'moveselection'
   | 'shapes' 
   | 'eyedropper' 
   | 'text' 
@@ -62,4 +63,5 @@ export interface AppState {
   secondaryColor: string;
   activeLayerId: string;
   hasSelection: boolean;
+  moveMode: 'pixels' | 'selection';
 }
